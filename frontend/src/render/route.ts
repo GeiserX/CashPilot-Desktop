@@ -55,11 +55,16 @@ export function ackText(key: string): string {
   return key === "account_risk" ? t("proxies.ack.accountRisk") : key;
 }
 
-/** The ticks the Route box of slug holds, checked, inside root. */
-export function routeAcks(root: ParentNode, slug: string): string[] {
-  return [...root.querySelectorAll<HTMLInputElement>("[data-wizard-route-ack]")]
-    .filter((el) => el.checked && el.dataset.wizardRouteAck === slug)
-    .map((el) => el.value);
+/** One tick box as main.ts reads it: whether it is checked, its service, its key. */
+export interface AckTick {
+  checked: boolean;
+  slug: string;
+  value: string;
+}
+
+/** The keys a deploy of slug sends: the checked ticks of that service only. */
+export function chosenAcks(ticks: AckTick[], slug: string): string[] {
+  return ticks.filter((tick) => tick.checked && tick.slug === slug).map((tick) => tick.value);
 }
 
 /** The proxy id to deploy through, or null for this computer's own IP. */

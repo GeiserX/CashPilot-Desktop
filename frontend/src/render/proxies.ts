@@ -209,13 +209,6 @@ export function keepsLiveProxyEditor(liveId: string | null | undefined, freshId:
   return liveId != null && freshId != null && liveId === freshId;
 }
 
-/** The ticks the copy form holds, checked, for slug inside root. */
-export function proxyAcks(root: ParentNode, slug: string): string[] {
-  return [...root.querySelectorAll<HTMLInputElement>("[data-proxy-ack-for]")]
-    .filter((el) => el.checked && el.dataset.proxyAckFor === slug)
-    .map((el) => el.value);
-}
-
 /**
  * The whole section. editing is the proxy open in the editor, "new", or null.
  * runtime is the shared Docker status: a copy runs in Docker on this computer, so

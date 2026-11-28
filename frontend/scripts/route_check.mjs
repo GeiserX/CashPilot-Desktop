@@ -18,7 +18,7 @@
 //
 //   node scripts/route_check.mjs      # against ./.harness-build
 
-import { leavesRoute, routeAcks, routeChoice, routeChoiceSection, routedDeployText, runRouteDeploy, wizardAfterNav } from "../.harness-build/render/route.js";
+import { chosenAcks, leavesRoute, routeChoice, routeChoiceSection, routedDeployText, runRouteDeploy, wizardAfterNav } from "../.harness-build/render/route.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 
 let failures = 0;
@@ -147,17 +147,15 @@ for (const proxyId of [null, 3]) {
 
 // 12. The owner tick.
 {
-// A root whose querySelectorAll answers with the ticks given, as the DOM would.
-const ticks = (attr, items) => ({ querySelectorAll: (sel) => (sel === `[${attr}]` ? items : []) });
   const risky = routeChoiceSection(honeygain, { ...route, needs: { honeygain: ["account_risk"] } });
   check("RULE 12: the tick is in the box", /<input type="checkbox" data-wizard-route-ack="honeygain" value="account_risk">/.test(risky), risky);
   check("RULE 12: it says the account may be suspended", risky.includes("Your Honeygain account may be suspended"), risky);
   check("RULE 12: no needs, no tick", !box.includes("data-wizard-route-ack"));
-  const root = ticks("data-wizard-route-ack", [
-    { checked: true, dataset: { wizardRouteAck: "honeygain" }, value: "account_risk" },
-    { checked: false, dataset: { wizardRouteAck: "honeygain" }, value: "other" },
-  ]);
-  check("RULE 12: the routed deploy sends the checked tick only", JSON.stringify(routeAcks(root, "honeygain")) === '["account_risk"]');
+  const ticks = [
+    { checked: true, slug: "honeygain", value: "account_risk" },
+    { checked: false, slug: "honeygain", value: "other" },
+  ];
+  check("RULE 12: the routed deploy sends the checked tick only", JSON.stringify(chosenAcks(ticks, "honeygain")) === '["account_risk"]');
 }
 
 if (failures) {

@@ -115,7 +115,7 @@ import { createBoot } from "./render/boot";
 import { firstRunSteps, renderGateSteps, renderJoinOutcome, renderJoinedBanner, renderModeCard, type Mode, type ModeCardView } from "./render/mode";
 import { gatePage as chromeGatePage, withChrome as chromeWithChrome, windowPlatform, type WindowPlatform } from "./render/chrome";
 import { firstRunScreen } from "./render/firstrun";
-import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyAcks, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
+import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
@@ -149,7 +149,7 @@ import type { SecureVMRemoveResult, SecureVMStatus as SecureVMReading } from "./
 import { guidesBesideChecklist, loadRuntimePage, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
 import { dockerBlockedNote, renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
-import { routeAcks, routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
+import { chosenAcks, routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
 import { copyCommandQuestion, workerCopiesSection } from "./render/workercopies";
 import { composeSelectionExport, deviceLinkText, payoutLedger, renderPayoutFacts } from "./render/details";
@@ -2510,7 +2510,7 @@ function wireProxies() {
     const service = proxiesState?.candidates.find((item) => item.slug === slug)?.name || slug;
     const proxy = proxyById(id)?.name || t("main.proxy.selected");
     await runDeployWithStatus(t("main.proxy.deploying", {service, proxy}), say, async () => {
-      const result = await DeployProxiedCopy(slug, id, proxyAcks(document, slug));
+      const result = await DeployProxiedCopy(slug, id, readAcks("data-proxy-ack-for", slug));
       return {
         kind: "ok",
         text: `${result.exitIp ? t("main.proxy.running", {service, proxy, ip: result.exitIp}) : t("main.proxy.runningNoIp", {service, proxy})}${result.warning ? ` ${result.warning}` : ""}`,
@@ -2976,6 +2976,17 @@ function readWizardInstances(slug: string): number | null {
   return input ? instancesChoice(input.value, input.dataset.initial || "", input.disabled) : null;
 }
 
+// The owner's ticks for slug behind a proxy (proxies.Acknowledgements): the copy
+// form's data-proxy-ack-for boxes, or the Route box's data-wizard-route-ack ones.
+function readAcks(attr: "data-proxy-ack-for" | "data-wizard-route-ack", slug: string): string[] {
+  const ticks = [...document.querySelectorAll<HTMLInputElement>(`[${attr}]`)].map((el) => ({
+    checked: el.checked,
+    slug: el.getAttribute(attr) || "",
+    value: el.value,
+  }));
+  return chosenAcks(ticks, slug);
+}
+
 // The Route box's answer: a proxy id, or null for this computer's own IP.
 function readWizardRoute(slug: string): number | null {
   const select = document.querySelector<HTMLSelectElement>(`[data-form-slug="${slug}"] [data-wizard-route]`);
@@ -3337,7 +3348,7 @@ async function deployFromCard(
   const outcome = await runRouteDeploy(slug, proxyId, image, instances, route, {
     confirm: (message) => confirm(message),
     routed: (proxyId) => sendCredentialRequest(values, secretKeys, (request) =>
-      DeployServiceRouted(slug, request, proxyId, routeAcks(document, slug)),
+      DeployServiceRouted(slug, request, proxyId, readAcks("data-wizard-route-ack", slug)),
     ),
     direct: (leaveRoute) => sendCredentialRequest(values, secretKeys, (request) => {
       if (approval) return DeployServiceWithAdminApproval(slug, request, image, instances, leaveRoute, approval);

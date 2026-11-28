@@ -21,7 +21,8 @@
 //
 //   node scripts/proxies_check.mjs      # against ./.harness-build
 
-import { capText, fleetRedrawIsCurrent, formatGB, keepsLiveProxyEditor, PROXIES_DOCS_URL, proxyAcks, proxyValuesFrom, renderProxiesSection, renderProxyCard, renderProxyEditor } from "../.harness-build/render/proxies.js";
+import { chosenAcks } from "../.harness-build/render/route.js";
+import { capText, fleetRedrawIsCurrent, formatGB, keepsLiveProxyEditor, PROXIES_DOCS_URL, proxyValuesFrom, renderProxiesSection, renderProxyCard, renderProxyEditor } from "../.harness-build/render/proxies.js";
 
 let failures = 0;
 let checks = 0;
@@ -146,19 +147,17 @@ for (const status of [{ kind: "busy", text: "Deploying through Gate..." }, { kin
 
 // 12. The owner tick.
 {
-// A root whose querySelectorAll answers with the ticks given, as the DOM would.
-const ticks = (attr, items) => ({ querySelectorAll: (sel) => (sel === `[${attr}]` ? items : []) });
   const risky = renderProxiesSection({ ...state, candidates: [...state.candidates, { slug: "honeygain", name: "Honeygain", refusal: "", needs: ["account_risk"] }] }, null);
   check("RULE 12: the tick is offered", /<input type="checkbox" data-proxy-ack-for="honeygain" value="account_risk">/.test(risky), risky);
   check("RULE 12: it says the account may be suspended", risky.includes("Your Honeygain account may be suspended"), risky);
   check("RULE 12: a service with no needs gets no tick", !section.includes("data-proxy-ack-for"));
-  const root = ticks("data-proxy-ack-for", [
-    { checked: true, dataset: { proxyAckFor: "honeygain" }, value: "account_risk" },
-    { checked: true, dataset: { proxyAckFor: "other" }, value: "account_risk" },
-  ]);
-  check("RULE 12: deploy sends the chosen service's tick", JSON.stringify(proxyAcks(root, "honeygain")) === '["account_risk"]');
-  check("RULE 12: and no tick of another service", proxyAcks(root, "earner").length === 0);
-  check("RULE 12: an unchecked tick is not sent", proxyAcks(ticks("data-proxy-ack-for", [{ checked: false, dataset: { proxyAckFor: "honeygain" }, value: "account_risk" }]), "honeygain").length === 0);
+  const ticks = [
+    { checked: true, slug: "honeygain", value: "account_risk" },
+    { checked: true, slug: "other", value: "account_risk" },
+  ];
+  check("RULE 12: deploy sends the chosen service's tick", JSON.stringify(chosenAcks(ticks, "honeygain")) === '["account_risk"]');
+  check("RULE 12: and no tick of another service", chosenAcks(ticks, "earner").length === 0);
+  check("RULE 12: an unchecked tick is not sent", chosenAcks([{ checked: false, slug: "honeygain", value: "account_risk" }], "honeygain").length === 0);
 }
 
 if (failures) {
