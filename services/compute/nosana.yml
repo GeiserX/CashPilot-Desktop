@@ -39,7 +39,7 @@ earnings:
   monthly_low: 0
   monthly_high: 100
   currency: USD
-  per: "GPU-hour"
+  per: "GPU"
   notes: "RTX 3060 ~$0.048/hr, higher-end GPUs earn more. Earnings depend on job availability and GPU model. Requires NVIDIA GPU, Linux, Docker, and Nosana CLI. Payments in NOS token on Solana."
 
 cashout:
@@ -61,7 +61,7 @@ collector:
 payout:
   model: minted
   chain: solana
-  notes: "Mints a Solana wallet by default. The user has typically never seen the address. See tier 3."
+  notes: "Nosana creates a Solana wallet by default, so most users have never seen its address."
 
 # Provider rating: the verdicts behind the grade (method: services/_ratings.yml,
 # published at docs/ratings.md). The grade itself is computed, never written here.

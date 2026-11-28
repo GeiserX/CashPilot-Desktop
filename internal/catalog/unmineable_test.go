@@ -11,11 +11,11 @@ import (
 )
 
 // unMineableWebSHA256 is the sha256 of services/mining/unmineable.yml in the web
-// repository at GeiserX/CashPilot 6d22f6a (#850), which made the CPU cap wrapper
-// (#847) hold on x86 hosts with no L3 of at least 2048K in sysfs, in the entry #844
-// created. If the web entry changes, vendor it with catalogsync, check the referral
+// repository after GeiserX/CashPilot #907, which moved the referral split under
+// referral.bonus. #850 before it made the CPU cap wrapper (#847) hold on x86 hosts
+// with no L3 of at least 2048K in sysfs, in the entry #844 created. If the web entry changes, vendor it with catalogsync, check the referral
 // tests below still describe it, and update this sum in the same PR.
-const unMineableWebSHA256 = "f96434fca6d5d17ae92b389bc142fbcd54f51d730b356c7aa5b2d04c62fab614"
+const unMineableWebSHA256 = "6f4a5a583fbdc41f70780dc9d7a76c2f40829716656eda5302ba855b72f0cc6f"
 
 // unMineableReferral is CashPilot's unMineable referral code. unMineable reads it
 // from the "#code" after the worker name, so every worker must carry it.
@@ -28,7 +28,7 @@ func TestUnMineableIsTheWebEntry(t *testing.T) {
 	}
 	sum := sha256.Sum256(raw)
 	if got := hex.EncodeToString(sum[:]); got != unMineableWebSHA256 {
-		t.Fatalf("services/mining/unmineable.yml is not the web file at 6d22f6a (sha256 %s, want %s). "+
+		t.Fatalf("services/mining/unmineable.yml is not the web file after #907 (sha256 %s, want %s). "+
 			"Vendor it with catalogsync and check the referral code before updating the sum", got, unMineableWebSHA256)
 	}
 }
@@ -52,7 +52,7 @@ func TestEveryUnMineableWorkerCarriesTheReferralCode(t *testing.T) {
 	if svc.Mining == nil || !strings.Contains(svc.Mining.PoolFeeNote, "#"+unMineableReferral) {
 		t.Errorf("the fee note does not disclose the referral code: %+v", svc.Mining)
 	}
-	if svc.Referral.Referrer == "" || svc.Referral.Referee == "" {
+	if svc.Referral.Bonus.Referrer == "" || svc.Referral.Bonus.Referee == "" {
 		t.Errorf("the referral split was not read: %+v", svc.Referral)
 	}
 	if svc.Docker.Image != mustGet(t, cat, "xmrig").Docker.Image {
