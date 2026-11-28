@@ -2134,7 +2134,7 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Satırları kaydır",
   "logs.empty": "(günlük yok)",
-  "go.importers.refuse.m4bEncrypted": "{name} şifrelenmiş bir money4band 5.0 dosyası. `m4b config edit` komutunu çalıştırın, açtığı şifresi çözülmüş JSON'u kopyalayın ve buraya yapıştırın.",
+  "go.importers.refuse.m4bEncrypted": "{name} şifrelenmiş bir money4band 5.0 dosyası. money4band klasörünüzde, sisteminiz için yayımlanan dosyayla `config edit` komutunu çalıştırın (örneğin `./Money4Band-linux-amd64 config edit`) ya da kaynak koddan çalıştırıyorsanız `python run.py config edit` komutunu çalıştırın. Açtığı şifresi çözülmüş JSON'u kopyalayın ve buraya yapıştırın.",
   "installer.finishRun": "CashPilot Desktop'u aç",
   "installer.closing": "{dir} konumundan çalışıyorsa CashPilot Desktop kapatılıyor",
   "installer.options.title": "Başka neyin kaldırılacağını seçin",

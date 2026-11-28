@@ -2134,7 +2134,7 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Zawijaj wiersze",
   "logs.empty": "(brak logów)",
-  "go.importers.refuse.m4bEncrypted": "{name} to zaszyfrowany plik money4band 5.0. Uruchom `m4b config edit`, skopiuj odszyfrowany JSON, który otworzy, i wklej go tutaj.",
+  "go.importers.refuse.m4bEncrypted": "{name} to zaszyfrowany plik money4band 5.0. W folderze money4band uruchom `config edit` z wydanym plikiem dla Twojego systemu (na przykład `./Money4Band-linux-amd64 config edit`) albo `python run.py config edit`, jeśli uruchamiasz go ze źródeł. Skopiuj odszyfrowany JSON, który otworzy, i wklej go tutaj.",
   "installer.finishRun": "Otwórz CashPilot Desktop",
   "installer.closing": "Zamykanie CashPilot Desktop, jeśli działa z {dir}",
   "installer.options.title": "Wybierz, co jeszcze usunąć",

@@ -2134,7 +2134,7 @@
   "main.scope.worker": "worker",
   "logs.wrap": "I-wrap ang mga linya",
   "logs.empty": "(walang logs)",
-  "go.importers.refuse.m4bEncrypted": "Naka-encrypt na money4band 5.0 file ang {name}. Patakbuhin ang `m4b config edit`, kopyahin ang na-decrypt na JSON na binubuksan nito, at i-paste ito rito.",
+  "go.importers.refuse.m4bEncrypted": "Naka-encrypt na money4band 5.0 file ang {name}. Sa iyong money4band folder, patakbuhin ang `config edit` gamit ang release file para sa iyong system (halimbawa, `./Money4Band-linux-amd64 config edit`), o ang `python run.py config edit` kung mula sa source. Kopyahin ang na-decrypt na JSON na binubuksan nito, at i-paste ito rito.",
   "installer.finishRun": "Buksan ang CashPilot Desktop",
   "installer.closing": "Isinasara ang CashPilot Desktop kung tumatakbo ito mula sa {dir}",
   "installer.options.title": "Piliin kung ano pa ang aalisin",

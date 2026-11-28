@@ -2134,7 +2134,7 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Regels afbreken",
   "logs.empty": "(geen logboeken)",
-  "go.importers.refuse.m4bEncrypted": "{name} is een versleuteld money4band 5.0-bestand. Voer `m4b config edit` uit, kopieer de ontsleutelde JSON die het opent en plak die hier.",
+  "go.importers.refuse.m4bEncrypted": "{name} is een versleuteld money4band 5.0-bestand. Voer in je money4band-map `config edit` uit met het uitgebrachte bestand voor je systeem (bijvoorbeeld `./Money4Band-linux-amd64 config edit`), of `python run.py config edit` vanuit de broncode. Kopieer de ontsleutelde JSON die het opent en plak die hier.",
   "installer.finishRun": "CashPilot Desktop openen",
   "installer.closing": "CashPilot Desktop wordt gesloten als het vanuit {dir} draait",
   "installer.options.title": "Kies wat er nog meer moet worden verwijderd",

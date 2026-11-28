@@ -2134,7 +2134,7 @@
   "main.scope.worker": "เวิร์กเกอร์",
   "logs.wrap": "ตัดบรรทัด",
   "logs.empty": "(ไม่มีบันทึก)",
-  "go.importers.refuse.m4bEncrypted": "{name} เป็นไฟล์ money4band 5.0 ที่เข้ารหัสไว้ ให้รัน `m4b config edit` คัดลอก JSON ที่ถอดรหัสแล้วซึ่งคำสั่งนี้เปิดขึ้นมา แล้ววางที่นี่",
+  "go.importers.refuse.m4bEncrypted": "{name} เป็นไฟล์ money4band 5.0 ที่เข้ารหัสไว้ ในโฟลเดอร์ money4band ให้รัน `config edit` ด้วยไฟล์ที่เผยแพร่สำหรับระบบของคุณ (เช่น `./Money4Band-linux-amd64 config edit`) หรือรัน `python run.py config edit` หากใช้จากซอร์สโค้ด คัดลอก JSON ที่ถอดรหัสแล้วซึ่งคำสั่งนี้เปิดขึ้นมา แล้ววางที่นี่",
   "installer.finishRun": "เปิด CashPilot Desktop",
   "installer.closing": "กำลังปิด CashPilot Desktop หากทำงานจาก {dir}",
   "installer.options.title": "เลือกสิ่งอื่นที่จะนำออก",

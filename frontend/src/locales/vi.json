@@ -2134,7 +2134,7 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Ngắt dòng",
   "logs.empty": "(không có nhật ký)",
-  "go.importers.refuse.m4bEncrypted": "{name} là tệp money4band 5.0 đã được mã hóa. Hãy chạy `m4b config edit`, sao chép JSON đã giải mã mà lệnh này mở ra, rồi dán vào đây.",
+  "go.importers.refuse.m4bEncrypted": "{name} là tệp money4band 5.0 đã được mã hóa. Trong thư mục money4band, hãy chạy `config edit` với tệp phát hành dành cho hệ thống của bạn (ví dụ `./Money4Band-linux-amd64 config edit`), hoặc `python run.py config edit` nếu chạy từ mã nguồn. Sao chép JSON đã giải mã mà lệnh này mở ra, rồi dán vào đây.",
   "installer.finishRun": "Mở CashPilot Desktop",
   "installer.closing": "Đang đóng CashPilot Desktop nếu nó chạy từ {dir}",
   "installer.options.title": "Chọn những gì cần gỡ thêm",
