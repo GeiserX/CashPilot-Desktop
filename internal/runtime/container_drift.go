@@ -45,6 +45,8 @@ const labelDeployedBy = "cashpilot.deployed-by"
 // mount targets without their sources, and no command at all (it carries
 // credentials).
 type ContainerShape struct {
+	// ID is the container's ID.
+	ID       string
 	Slug     string
 	Instance int
 	// Arch is the daemon's architecture, which picks the catalog's per-arch image.
@@ -106,6 +108,7 @@ func containerShapes(ctx context.Context, cli shapeClient) ([]ContainerShape, er
 			continue
 		}
 		shape := shapeOf(inspected.Container)
+		shape.ID = c.ID
 		shape.Slug = c.Labels[LabelService]
 		shape.Instance = instanceOf(c.Labels)
 		shape.Arch = arch
