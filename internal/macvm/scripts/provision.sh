@@ -16,6 +16,21 @@ set -eu
 
 # Awake, no screen saver, no Spotlight indexing.
 pmset -a sleep 0 displaysleep 0 disksleep 0 powernap 0 >/dev/null
+# powerd saves these to disk up to a minute later, and the restart after this
+# script can come first. Then the display sleeps after 10 minutes and locks
+# the earner's screen behind a password nobody knows. Wait until they are saved.
+pm=/Library/Preferences/com.apple.PowerManagement.plist
+saved() {
+  for k in "System Sleep Timer" "Display Sleep Timer" "Disk Sleep Timer"; do
+    [ "$(plutil -extract "AC Power.$k" raw "$pm" 2>/dev/null)" = 0 ] || return 1
+  done
+}
+n=0
+until saved; do
+  n=$((n + 1))
+  [ "$n" -le 120 ] || { echo "the guest did not save its sleep settings" >&2; exit 1; }
+  sleep 1
+done
 systemsetup -setsleep Off >/dev/null 2>&1 || true
 defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
 mdutil -a -i off >/dev/null 2>&1 || true
