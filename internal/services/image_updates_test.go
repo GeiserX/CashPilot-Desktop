@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +159,19 @@ func TestAnUpdateDeployLeavesAnAppThatIsNotRunning(t *testing.T) {
 	var got *runtime.ImageUpdateResult
 	if _, err := m.DeployWith(context.Background(), "example", map[string]string{"TOKEN": "abc"}, updateOptions(time.Now(), &got)); err == nil {
 		t.Fatal("an update deploy ran on an app that had stopped by itself")
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("the runtime was asked to deploy %d times; want none", fake.deployCalls)
+	}
+}
+
+func TestAnUpdateDeployNamesARuntimeThatCouldNotBeRead(t *testing.T) {
+	fake := &fakeProvider{listErr: errors.New("daemon gone")}
+	m := NewManager(fake, newTestCatalog(t), newTestStore(t))
+	var got *runtime.ImageUpdateResult
+	_, err := m.DeployWith(context.Background(), "example", map[string]string{"TOKEN": "abc"}, updateOptions(time.Now(), &got))
+	if err == nil || !strings.Contains(err.Error(), "daemon gone") || strings.Contains(err.Error(), "was stopped") {
+		t.Fatalf("err = %v; want the runtime's reason, not a stop", err)
 	}
 	if fake.deployCalls != 0 {
 		t.Fatalf("the runtime was asked to deploy %d times; want none", fake.deployCalls)

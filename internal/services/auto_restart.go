@@ -84,16 +84,22 @@ func (m *Manager) RestartStuck(ctx context.Context, slug string, listedAt time.T
 // runningNow reports whether the runtime lists slug's first copy as running or
 // restarting right now. A failed listing is false: no restart on a guess.
 func (m *Manager) runningNow(ctx context.Context, slug string) bool {
+	running, _ := m.runningRead(ctx, slug)
+	return running
+}
+
+// runningRead is runningNow, with the error of a runtime that could not be read.
+func (m *Manager) runningRead(ctx context.Context, slug string) (bool, error) {
 	infos, err := m.providerForSlug(slug).List(ctx)
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, info := range infos {
 		if info.Slug == slug && info.Instance <= 1 {
-			return info.Status == "running" || info.Status == "restarting"
+			return info.Status == "running" || info.Status == "restarting", nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // copyStopKey is the key the owner's Stop of copy n (n >= 2) is recorded under. A

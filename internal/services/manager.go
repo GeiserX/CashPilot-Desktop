@@ -382,7 +382,15 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 	if !opts.CheckedAt.IsZero() {
 		// Before the deploy lock, as RestartStuck takes them.
 		defer m.stops.lock(slug)()
-		if m.stops.since(slug, opts.CheckedAt) || !m.runningNow(ctx, slug) {
+		running := false
+		if !m.stops.since(slug, opts.CheckedAt) {
+			var err error
+			if running, err = m.runningRead(ctx, slug); err != nil {
+				// Not known to be stopped: the reason is the runtime's.
+				return store.Deployment{}, nil, wrapText(i18n.T("go.services.update.unread", "slug", slug, "error", err.Error()), err)
+			}
+		}
+		if !running {
 			return store.Deployment{}, nil, errors.New(i18n.T("go.services.update.stopped", "slug", slug))
 		}
 	}

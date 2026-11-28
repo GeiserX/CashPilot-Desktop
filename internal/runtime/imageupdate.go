@@ -141,13 +141,31 @@ func (p *DockerProvider) CheckImage(ctx context.Context, slug string, svc catalo
 // repoDigest is the digest of ref's repository among an image's repo digests.
 func repoDigest(digests []string, ref string) string {
 	repo, _ := splitRef(ref)
+	want := canonicalRepo(repo)
 	for _, d := range digests {
-		if r, digest, ok := strings.Cut(d, "@"); ok && (r == repo || strings.HasSuffix(r, "/"+repo)) {
+		if r, digest, ok := strings.Cut(d, "@"); ok && canonicalRepo(r) == want {
 			return digest
 		}
 	}
 	// Another repository's digest is not this one's: no digest beats a wrong one.
 	return ""
+}
+
+// canonicalRepo is a repository's full name, as Docker resolves it: "orderly"
+// and "docker.io/library/orderly" are one repository, and
+// "mirror.example/example/orderly" is another one than "example/orderly".
+func canonicalRepo(name string) string {
+	parts := strings.Split(name, "/")
+	if len(parts) == 1 || (!strings.ContainsAny(parts[0], ".:") && parts[0] != "localhost") {
+		parts = append([]string{"docker.io"}, parts...)
+	}
+	if parts[0] == "index.docker.io" {
+		parts[0] = "docker.io"
+	}
+	if parts[0] == "docker.io" && len(parts) == 2 {
+		parts = []string{"docker.io", "library", parts[1]}
+	}
+	return strings.Join(parts, "/")
 }
 
 // ImageUpdateUndone is a deploy with a check period whose new container failed it.

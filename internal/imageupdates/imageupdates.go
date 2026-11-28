@@ -20,6 +20,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
@@ -156,6 +157,38 @@ type Hooks struct {
 	Seen func(slug, newImage string, results ...string) (bool, error)
 	// Sleep waits between updates; nil waits for real.
 	Sleep func(ctx context.Context, d time.Duration)
+	// Holds keeps the builds undone while the app runs; nil keeps none.
+	Holds *Holds
+}
+
+// Holds are the builds undone while the app runs, by app. The history row is
+// what holds a build, and Holds covers a row that could not be written: the
+// build stays held, and the next check writes the row again.
+type Holds struct {
+	mu   sync.Mutex
+	rows map[string]Record
+}
+
+func (h *Holds) add(rec Record) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.rows == nil {
+		h.rows = map[string]Record{}
+	}
+	h.rows[rec.Slug+"\x00"+rec.NewImage] = rec
+}
+
+func (h *Holds) get(slug, image string) (Record, bool) {
+	if h == nil {
+		return Record{}, false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rec, ok := h.rows[slug+"\x00"+image]
+	return rec, ok
 }
 
 // UpdateService checks one app and acts on mode. It returns what happened, for the
@@ -184,6 +217,13 @@ func UpdateService(ctx context.Context, h Hooks, slug, mode string) (string, err
 	}
 	rec := Record{Slug: slug, OldImage: check.RunningID, NewImage: check.LatestID, OldDigest: check.RunningDigest, NewDigest: check.LatestDigest}
 	// A build that already failed here is never tried again; a newer one is.
+	if undone, ok := h.Holds.get(slug, check.LatestID); ok {
+		// Its row may not be written yet: write it now, and redeploy nothing.
+		if seen, err := h.Seen(slug, check.LatestID, RolledBack); err != nil || seen {
+			return "held", err
+		}
+		return "held", h.Record(undone)
+	}
 	if held, err := h.Seen(slug, check.LatestID, RolledBack); err != nil || held {
 		return "held", err
 	}
@@ -199,10 +239,21 @@ func UpdateService(ctx context.Context, h Hooks, slug, mode string) (string, err
 		return "skipped", recordOnce(h, rec, Skipped)
 	}
 	result, rolledBack, err := h.Deploy(ctx, slug, check.ContainerID, check.LatestID, checkedAt)
+	if err != nil && !rolledBack && result.NewImage != "" {
+		// The new build passed and runs; a later step of the deploy failed.
+		rec.Result, rec.NewImage = Updated, result.NewImage
+		rec.Detail = i18n.T("go.imageupdates.laterStep", "error", err.Error())
+		if recErr := h.Record(rec); recErr != nil {
+			return Updated, errors.Join(err, recErr)
+		}
+		return Updated, err
+	}
 	if err != nil {
 		rec.Result, rec.Detail = Failed, err.Error()
 		if rolledBack {
 			rec.Result = RolledBack
+			// Held at once: a row that cannot be written must not free the build.
+			h.Holds.add(rec)
 		}
 		if recErr := h.Record(rec); recErr != nil {
 			// Both reasons reach the log: the deploy's and the history's.

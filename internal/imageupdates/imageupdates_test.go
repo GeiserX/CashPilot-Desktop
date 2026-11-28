@@ -306,3 +306,68 @@ func TestSettings(t *testing.T) {
 		t.Fatal("Short")
 	}
 }
+
+// An undone build whose history row could not be written stays held while the
+// app runs: the next check writes the row and redeploys nothing.
+func TestAnUndoneBuildStaysHeldWhenItsRowCannotBeWritten(t *testing.T) {
+	f := newFake(map[string]Check{"a": moved("a")})
+	f.undo["a"] = true
+	holds := &Holds{}
+	h := f.hooks()
+	h.Holds = holds
+	broken := true
+	record := h.Record
+	h.Record = func(r Record) error {
+		if broken {
+			return errors.New("disk full")
+		}
+		return record(r)
+	}
+	if got, err := UpdateService(context.Background(), h, "a", Auto); got != RolledBack || err == nil {
+		t.Fatalf("first run = %q, %v; want rolled_back with the write error", got, err)
+	}
+	broken = false
+	for range 2 {
+		if got, err := UpdateService(context.Background(), h, "a", Auto); got != "held" || err != nil {
+			t.Fatalf("later run = %q, %v; want held", got, err)
+		}
+	}
+	if len(f.deployed) != 1 {
+		t.Fatalf("deploys = %v; want the first one only", f.deployed)
+	}
+	if len(f.rows) != 1 || f.rows[0].Result != RolledBack || f.rows[0].NewImage != "sha256:new-a" {
+		t.Fatalf("rows = %+v; want the undo written once", f.rows)
+	}
+	// Control: a newer build is tried.
+	c := f.checks["a"]
+	c.LatestID = "sha256:newer-a"
+	f.checks["a"] = c
+	f.undo["a"] = false
+	if got, err := UpdateService(context.Background(), h, "a", Auto); got != Updated || err != nil {
+		t.Fatalf("newer build = %q, %v; want updated", got, err)
+	}
+}
+
+// A deploy that put the new build in place and then failed a later step records
+// the build as installed, so the row matches what runs.
+func TestABuildThatRunsIsRecordedAsInstalledWhenALaterStepFails(t *testing.T) {
+	f := newFake(map[string]Check{"a": moved("a")})
+	h := f.hooks()
+	h.Deploy = func(_ context.Context, slug, containerID, newImage string, _ time.Time) (DeployResult, bool, error) {
+		f.deployed = append(f.deployed, slug+"@"+containerID)
+		return DeployResult{NewImage: newImage}, false, errors.New("the deployment record could not be written")
+	}
+	got, err := UpdateService(context.Background(), h, "a", Auto)
+	if got != Updated || err == nil {
+		t.Fatalf("got %q, %v; want updated, with the later error", got, err)
+	}
+	if len(f.rows) != 1 || f.rows[0].Result != Updated || f.rows[0].NewImage != "sha256:new-a" || !strings.Contains(f.rows[0].Detail, "could not be written") {
+		t.Fatalf("rows = %+v; want one updated row that names the later error", f.rows)
+	}
+	// Control: a deploy that installed nothing is still a failure.
+	f = newFake(map[string]Check{"a": moved("a")})
+	f.fail["a"] = true
+	if got, _ := UpdateService(context.Background(), f.hooks(), "a", Auto); got != Failed {
+		t.Fatalf("a deploy that installed nothing = %q; want failed", got)
+	}
+}

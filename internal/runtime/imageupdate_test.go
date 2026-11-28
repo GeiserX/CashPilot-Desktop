@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -423,6 +424,17 @@ func TestRepoDigestNamesOnlyTheCheckedRepository(t *testing.T) {
 	if got := repoDigest([]string{"mirror.example/other@sha256:c", "example/orderly@sha256:d"}, tagRef); got != "sha256:d" {
 		t.Fatalf("the checked repository's digest: %q", got)
 	}
+	// A mirror with the same path is another repository.
+	if got := repoDigest([]string{"mirror.example/example/orderly@sha256:m", "docker.io/example/orderly@sha256:d"}, tagRef); got != "sha256:d" {
+		t.Fatalf("a mirror's digest was taken for Docker Hub's: %q", got)
+	}
+	// The short and the full name of one Docker Hub repository are the same one.
+	if got := repoDigest([]string{"docker.io/library/busybox@sha256:b"}, "busybox:1.37.0"); got != "sha256:b" {
+		t.Fatalf("the full name of an official image: %q", got)
+	}
+	if got := repoDigest([]string{"ghcr.io/x/y@sha256:g"}, "ghcr.io/x/y:latest"); got != "sha256:g" {
+		t.Fatalf("another registry's own repository: %q", got)
+	}
 }
 
 // A look Docker takes and never answers is bounded: the period still ends, and
@@ -435,10 +447,23 @@ func TestALookDockerNeverAnswersStillEndsThePeriod(t *testing.T) {
 	svc := pinned()
 	docker, p, before := deployPinned(t, svc)
 	name := containerName(svc.Slug)
-	until := time.Now().Add(1500 * time.Millisecond)
+	// The window starts at the first stalled look, so a slow setup cannot use
+	// it up, and it ends, so the undo can still read the old container.
+	var mu sync.Mutex
+	var until time.Time
+	stalled := 0
 	var stall func()
 	stall = func() {
-		if time.Now().After(until) {
+		mu.Lock()
+		if until.IsZero() {
+			until = time.Now().Add(1500 * time.Millisecond)
+		}
+		open := time.Now().Before(until)
+		if open {
+			stalled++
+		}
+		mu.Unlock()
+		if !open {
 			return
 		}
 		docker.BeforeCall("GET /containers/"+name+"/json", stall)
@@ -458,6 +483,11 @@ func TestALookDockerNeverAnswersStillEndsThePeriod(t *testing.T) {
 	}
 	if after, _ := docker.Container(name); after.ID != before.ID || after.State != "running" {
 		t.Fatalf("the old container is not back: %+v", after)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if stalled == 0 {
+		t.Fatal("no look stalled, so the test proved nothing")
 	}
 }
 
