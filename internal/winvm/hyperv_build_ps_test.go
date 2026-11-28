@@ -674,6 +674,65 @@ func TestIdleNICsDoNotBreakTheCapture(t *testing.T) {
 	}
 }
 
+// pktmon logs a host vNIC's packets under its NDIS twin, the SecondaryId of
+// its Miniport entry, and exports its own entry with headers only (setup 1k:
+// component 314 empty, its twin 299 full). The vNIC counts as seen when
+// either one saw packets, and it is silent only when both are.
+func TestVNICPacketsUnderItsTwinCount(t *testing.T) {
+	ctx := context.Background()
+	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},` +
+		`{"Id":9,"Name":"vEthernet (cpd)","Type":"Host vNic","DriverName":"vmswitch.sys","Properties":[{"Name":"ifIndex","Value":20}]},` +
+		`{"Id":9,"Name":"Host vNic #4","Type":"Miniport","DriverName":"VmsProxyHNic.sys","SecondaryId":99,"Properties":[{"Name":"ifIndex","Value":20}]}]}]`
+	const metadata = `{"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7},{"id":9,"type":6,"driver":"vmswitch.sys","name":"cpd","ifIndex":20}]}`
+	traffic := pcapng(ipv4TCP(netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.50"), 45000))
+	for _, tc := range []struct {
+		name  string
+		empty []int
+		ok    bool
+	}{
+		{"packets only under the twin", []int{9}, true},
+		{"vNIC and twin both silent", []int{9, 99}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true}`)
+			mockCaptureStart(h, r)
+			p := &psProber{h: h, owner: tOwner, switchID: "c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e", tmp: filepath.Join(t.TempDir(), proofDir)}
+			capture, err := p.Pktmon(ctx, []PktFilter{{Addr: netip.MustParseAddr("192.0.2.50")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := capture.(*psCapture).dir
+			var files []string
+			for _, id := range []int{4, 9, 99} {
+				path := filepath.Join(dir, "c"+strconv.Itoa(id)+".pcapng")
+				data := traffic
+				if slices.Contains(tc.empty, id) {
+					data = pcapng()
+				}
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, `{"id":`+strconv.Itoa(id)+`,"path":`+jsonQuote(path)+`}`)
+			}
+			r.answers = append(r.answers, metadata, `{"files":[`+strings.Join(files, ",")+`]}`)
+			recs, err := capture.Stop(ctx)
+			if tc.ok {
+				vnic := 0
+				for _, rec := range recs {
+					if rec.Class == "vnic" {
+						vnic++
+					}
+				}
+				if err != nil || vnic != 1 || len(recs) != 2 {
+					t.Fatalf("Stop = %+v, %v; want the twin's packet as the vNIC's and the physical NIC's", recs, err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "component 9: capture has no packet data") {
+				t.Fatalf("Stop = %v, want the silent vNIC refused", err)
+			}
+		})
+	}
+}
+
 func TestHeaderOnlyPktmonExportLeavesProofUnproven(t *testing.T) {
 	ctx := context.Background()
 	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},{"Id":9,"Name":"vEthernet","Type":6,"ifIndex":20}]}]`

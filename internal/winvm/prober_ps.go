@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -493,11 +494,9 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	if err := reconcilePktmon(comps, lw.Components); err != nil {
 		return nil, err
 	}
-	want := []int{}
-	for id, c := range comps {
-		if !c.Twin {
-			want = append(want, id)
-		}
+	want := make([]int, 0, len(comps))
+	for id := range comps {
+		want = append(want, id)
 	}
 	slices.Sort(want)
 	for _, id := range want {
@@ -528,14 +527,26 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		files[f.ID] = f.Path
 	}
 	var out []PktRecord
-	silentPhysical, physicalSaw := 0, false
+	// A NIC and its twin are one NIC: it saw packets when either did.
+	saw, classes := map[int]bool{}, map[int]string{}
 	for _, id := range want {
+		cp := comps[id]
+		nic := id
+		if cp.Twin {
+			nic = cp.Of
+		}
+		class := componentClass(c.host, c.p.switchID, cp.IfIndex)
+		classes[nic] = class
+		if _, ok := saw[nic]; !ok {
+			saw[nic] = false
+		}
 		path := files[id]
 		if path == "" {
-			return nil, fmt.Errorf("pktmon did not export component %d (%s)", id, comps[id].Name)
+			if cp.Twin {
+				continue
+			}
+			return nil, fmt.Errorf("pktmon did not export component %d (%s)", id, cp.Name)
 		}
-		cp := comps[id]
-		class := componentClass(c.host, c.p.switchID, cp.IfIndex)
 		if err := j.verify(filepath.Join(c.rel, filepath.Base(path))); err != nil {
 			return nil, err
 		}
@@ -544,27 +555,37 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 			return nil, err
 		}
 		pkts, err := parsePcapng(b)
-		if errors.Is(err, errNoPacketData) && class != "vnic" {
-			// An idle NIC, such as the extension adapter of another VM's
-			// switch or an unplugged Ethernet port, sees nothing in a step
-			// (setup 1j). Its silence proves nothing either way, and a packet
-			// on it still counts as leaving. The probe's own path must show
-			// packets: every component of our vNIC, and one physical NIC.
-			if class == "physical" && silentPhysical == 0 {
-				silentPhysical = id
-			}
+		if errors.Is(err, errNoPacketData) {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("component %d: %w", id, err)
 		}
-		if class == "physical" {
-			physicalSaw = true
-		}
+		saw[nic] = true
 		for _, k := range pkts {
 			r := PktRecord{Component: cp.Name, Class: class, Src: k.Src, Dst: k.Dst, Proto: k.Proto, Port: k.Port}
 			if matchFilters(c.filters, r) {
 				out = append(out, r)
+			}
+		}
+	}
+	// An idle NIC, such as the extension adapter of another VM's switch or
+	// an unplugged Ethernet port, sees nothing in a step (setup 1j). Its
+	// silence proves nothing either way, and a packet on it still counts as
+	// leaving. The probe's own path must show packets: our vNIC, and at
+	// least one physical NIC.
+	silentPhysical, physicalSaw := 0, false
+	for _, nic := range slices.Sorted(maps.Keys(saw)) {
+		switch classes[nic] {
+		case "vnic":
+			if !saw[nic] {
+				return nil, fmt.Errorf("component %d: %w", nic, errNoPacketData)
+			}
+		case "physical":
+			if saw[nic] {
+				physicalSaw = true
+			} else if silentPhysical == 0 {
+				silentPhysical = nic
 			}
 		}
 	}

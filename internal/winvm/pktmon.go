@@ -21,10 +21,13 @@ type pktComp struct {
 	Driver  string
 	IfIndex int
 	Type    int
-	// Twin is a NIC's NDIS view under its SecondaryId. The trace can name
-	// it (setup 1i), but every packet it sees also passes the NIC's own
-	// entry, so the proof neither requires nor exports it.
+	// Twin is a NIC's NDIS view under its SecondaryId, and Of is the NIC's
+	// own ID. The trace may or may not name it (setup 1i), but pktmon can
+	// log a NIC's packets only under its twin: a host vNIC's own entry
+	// exported headers only while its twin held every packet (setup 1k).
+	// So the proof exports both and counts them as one NIC.
 	Twin bool
+	Of   int
 }
 
 // maxPktmonList caps the component list.
@@ -126,7 +129,7 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 				// A NIC's own entry, or another NIC, always wins over a twin.
 				if secondary && secondaryID > 0 && secondaryID != c.ID {
 					if _, seen := out[secondaryID]; !seen {
-						out[secondaryID] = pktComp{ID: secondaryID, Name: c.Name, Driver: c.Driver, IfIndex: c.IfIndex, Type: 2, Twin: true}
+						out[secondaryID] = pktComp{ID: secondaryID, Name: c.Name, Driver: c.Driver, IfIndex: c.IfIndex, Type: 2, Twin: true, Of: c.ID}
 					}
 				}
 			}
