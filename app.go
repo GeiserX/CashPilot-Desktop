@@ -701,8 +701,8 @@ func (a *App) GetAppState() (AppState, error) {
 	// frontend can proceed, and say honestly what runs, on Docker OR native.
 	runtimeStatus := a.runtimeStatus(visible)
 	return AppState{
-		Config:           a.cfg.Config(),
-		Runtime:          runtimeStatus,
+		Config:  a.cfg.Config(),
+		Runtime: runtimeStatus,
 		// The services' text in the user's language; everything else reads English.
 		Services:         a.catalog.Localized(visible, i18n.Current()),
 		Deployments:      deployments,
