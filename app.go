@@ -268,6 +268,8 @@ func (a *App) startCore(ctx context.Context) error {
 	// Which fence-gated earners the user stopped, so CashPilot does not start them
 	// again. A file, read on every check, so the window and the daemon share it.
 	docker.SetGatedStoppedFile(filepath.Join(cfg.DataDir(), "fence_gated_stopped"))
+	// Marks of image updates still in their check period, read by RecoverSetAside.
+	docker.SetSettlingDir(filepath.Join(cfg.DataDir(), "image_update_settling"))
 	docker.SetIsolationMemory(
 		func() bool { return a.cfg.Config().IsolationOn },
 		func(on bool) {

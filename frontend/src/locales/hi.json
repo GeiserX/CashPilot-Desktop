@@ -1133,6 +1133,8 @@
   "go.runtime.aside.removeUnstartedFailed": "{name} हटाया नहीं जा सका, जिसे एक अधूरे डिप्लॉय ने बनाया था और कभी शुरू नहीं किया",
   "go.runtime.aside.putBackFailed": "{aside} को वापस {name} के रूप में नहीं रखा जा सका",
   "go.runtime.aside.putBack": "{name} वापस रखा गया, जिसे एक अधूरे डिप्लॉय ने {aside} के रूप में अलग रखा था। यह बंद है।",
+  "go.runtime.aside.updateUndone": "Undid the update of {name}: the app stopped before the new build passed its check, so the previous container is back.",
+  "go.runtime.aside.removeUncheckedFailed": "could not remove {name}, which an image update made and did not finish checking",
   "go.runtime.aside.removeAsideFailed": "{name} हटाया नहीं जा सका, वह कंटेनर जिसे एक अधूरे डिप्लॉय ने अलग रखा था",
   "go.runtime.aside.previousUnchecked": "पिछला कंटेनर जाँचा नहीं जा सका ({error}): यह बंद हालत में, अपने डेटा के साथ, {aside} या {name} के रूप में रखा गया है। फिर से डिप्लॉय करें",
   "go.runtime.aside.previousNotPutBack": "पिछला कंटेनर वापस नहीं रखा जा सका ({error}): यह बंद हालत में, अपने डेटा के साथ, {aside} के रूप में रखा गया है। इसका नाम वापस {name} करें, या फिर से डिप्लॉय करें",

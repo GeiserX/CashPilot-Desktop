@@ -1133,6 +1133,8 @@
   "go.runtime.aside.removeUnstartedFailed": "นำ {name} ออกไม่ได้ ซึ่งการติดตั้งใช้งานที่ไม่เสร็จสร้างไว้และไม่เคยเริ่มทำงาน",
   "go.runtime.aside.putBackFailed": "นำ {aside} กลับเป็น {name} ไม่ได้",
   "go.runtime.aside.putBack": "นำ {name} กลับแล้ว ซึ่งการติดตั้งใช้งานที่ไม่เสร็จได้พักไว้ในชื่อ {aside} ตอนนี้อยู่ในสถานะหยุด",
+  "go.runtime.aside.updateUndone": "Undid the update of {name}: the app stopped before the new build passed its check, so the previous container is back.",
+  "go.runtime.aside.removeUncheckedFailed": "could not remove {name}, which an image update made and did not finish checking",
   "go.runtime.aside.removeAsideFailed": "นำ {name} ออกไม่ได้ ซึ่งเป็นคอนเทนเนอร์ที่การติดตั้งใช้งานที่ไม่เสร็จได้พักไว้",
   "go.runtime.aside.previousUnchecked": "ตรวจสอบคอนเทนเนอร์ก่อนหน้าไม่ได้ ({error}): เก็บไว้ในสถานะหยุด ในชื่อ {aside} หรือ {name} พร้อมข้อมูล ติดตั้งใช้งานอีกครั้ง",
   "go.runtime.aside.previousNotPutBack": "นำคอนเทนเนอร์ก่อนหน้ากลับไม่ได้ ({error}): เก็บไว้ในสถานะหยุด ในชื่อ {aside} พร้อมข้อมูล เปลี่ยนชื่อกลับเป็น {name} หรือติดตั้งใช้งานอีกครั้ง",
