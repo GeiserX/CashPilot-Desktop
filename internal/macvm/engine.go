@@ -672,7 +672,9 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 // and no VM files), or when the guest says that the app is not running. A
 // record that cannot be read proves nothing, so the guest is asked.
 func (e *Engine) guestMayRun(ctx context.Context, slug string, m catalog.GuestMacOS) bool {
-	if _, err := os.Stat(filepath.Join(e.P.State, InstallFile)); errors.Is(err, os.ErrNotExist) && !e.vmExists() {
+	_, rerr := os.Stat(filepath.Join(e.P.State, InstallFile))
+	_, verr := os.Stat(filepath.Join(VMDir(e.TartHome), "config.json"))
+	if errors.Is(rerr, os.ErrNotExist) && errors.Is(verr, os.ErrNotExist) {
 		return false
 	}
 	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
