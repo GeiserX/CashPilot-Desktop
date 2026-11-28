@@ -66,8 +66,8 @@ export function DeployAdminStep(arg1) {
   return window['go']['main']['App']['DeployAdminStep'](arg1);
 }
 
-export function DeployProxiedCopy(arg1, arg2) {
-  return window['go']['main']['App']['DeployProxiedCopy'](arg1, arg2);
+export function DeployProxiedCopy(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DeployProxiedCopy'](arg1, arg2, arg3);
 }
 
 export function DeployService(arg1, arg2, arg3, arg4) {
@@ -78,8 +78,8 @@ export function DeployServiceLeavingRoute(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DeployServiceLeavingRoute'](arg1, arg2, arg3, arg4);
 }
 
-export function DeployServiceRouted(arg1, arg2, arg3) {
-  return window['go']['main']['App']['DeployServiceRouted'](arg1, arg2, arg3);
+export function DeployServiceRouted(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DeployServiceRouted'](arg1, arg2, arg3, arg4);
 }
 
 export function DeployServiceWallet(arg1, arg2, arg3, arg4, arg5) {

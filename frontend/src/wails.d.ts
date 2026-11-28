@@ -49,7 +49,7 @@ declare module "../wailsjs/go/main/App" {
   export function DeployService(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
   // A service routed through a proxy from its first start, and the owner's confirmed
   // switch of a routed service back to this machine's own IP.
-  export function DeployServiceRouted(slug: string, values: Record<string, string>, proxyId: number): Promise<ProxiedResult>;
+  export function DeployServiceRouted(slug: string, values: Record<string, string>, proxyId: number, acknowledged: string[]): Promise<ProxiedResult>;
   export function DeployServiceLeavingRoute(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
   // Whether a deploy of slug makes Windows show its admin prompt, and what for. Reads only.
   export function DeployAdminStep(slug: string): Promise<AdminStep>;
@@ -122,7 +122,7 @@ declare module "../wailsjs/go/main/App" {
   export function SaveProxy(id: number, values: Record<string, string>): Promise<ProxyView>;
   export function DeleteProxy(id: number): Promise<void>;
   export function TestProxy(id: number): Promise<ProxyTestResult>;
-  export function DeployProxiedCopy(slug: string, id: number): Promise<ProxiedResult>;
+  export function DeployProxiedCopy(slug: string, id: number, acknowledged: string[]): Promise<ProxiedResult>;
   export function StopProxiedCopy(slug: string, id: number): Promise<void>;
   export function StartProxiedCopy(slug: string, id: number): Promise<void>;
   export function RemoveProxiedCopy(slug: string, id: number): Promise<void>;
@@ -225,6 +225,8 @@ export interface ProxyCandidate {
   name: string;
   // Why it cannot run behind a proxy, "" when it can.
   refusal: string;
+  // The ticks a copy needs (proxies.Acknowledgements), one checkbox each.
+  needs?: string[] | null;
 }
 
 export interface ProxiesState {
@@ -631,6 +633,8 @@ export interface RouteProxy {
 export interface RouteState {
   proxies: RouteProxy[] | null;
   refusals: Record<string, string> | null;
+  // Per service that needs any, the ticks a route needs, one checkbox each.
+  needs?: Record<string, string[]> | null;
   recorded: Record<string, number> | null;
   running: Record<string, number> | null;
   proxiedOnly: boolean;

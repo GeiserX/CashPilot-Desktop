@@ -171,7 +171,7 @@ func (m *Manager) Routes() map[string]int64 {
 // from this machine's IP meanwhile; a deploy that fails puts the earlier route back.
 // It holds the service's deploy lock throughout, as DeployWith does, so that rollback
 // never undoes another deploy's route.
-func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map[string]string, id int64) (ProxiedResult, error) {
+func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map[string]string, id int64, acknowledged ...string) (ProxiedResult, error) {
 	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
@@ -209,7 +209,7 @@ func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map
 	if _, _, err := m.store.SetRoute(slug, id); err != nil {
 		return ProxiedResult{}, fmt.Errorf("%s: %w", i18n.T("go.services.route.notRecorded", "name", svc.Name), err)
 	}
-	result, err := m.runProxied(ctx, slug, id, svc, credentials, true)
+	result, err := m.runProxied(ctx, slug, id, svc, credentials, true, acknowledged)
 	if err != nil {
 		if had {
 			_, _, _ = m.store.SetRoute(slug, before)

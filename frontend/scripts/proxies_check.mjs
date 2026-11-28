@@ -16,9 +16,12 @@
 //   9. THE EDITOR SAYS AN EDIT REACHES A COPY ON ITS NEXT START.
 //  10. THE SECTION LINKS TO THE PUBLISHED PROXIES PAGE, not to a repo path.
 //  11. A FLEET REDRAW NEVER OVERWRITES ANOTHER VIEW, and keeps the open editor's draft.
+//  12. A SERVICE WHOSE TERMS FORBID A PROXY SHOWS ITS OWNER TICK, AND DEPLOY SENDS ONLY
+//      THE CHOSEN SERVICE'S CHECKED TICKS.
 //
 //   node scripts/proxies_check.mjs      # against ./.harness-build
 
+import { chosenAcks } from "../.harness-build/render/route.js";
 import { capText, fleetRedrawIsCurrent, formatGB, keepsLiveProxyEditor, PROXIES_DOCS_URL, proxyValuesFrom, renderProxiesSection, renderProxyCard, renderProxyEditor } from "../.harness-build/render/proxies.js";
 
 let failures = 0;
@@ -140,6 +143,21 @@ for (const status of [{ kind: "busy", text: "Deploying through Gate..." }, { kin
   check(`a Fleet redraw shows the ${status.kind} deploy result by Run a copy`,
     /data-proxy-run-deploy[\s\S]*data-proxy-deploy-status/.test(redrawn)
       && redrawn.includes(`data-deploy-notice="${status.kind}"`) && redrawn.includes(status.text));
+}
+
+// 12. The owner tick.
+{
+  const risky = renderProxiesSection({ ...state, candidates: [...state.candidates, { slug: "honeygain", name: "Honeygain", refusal: "", needs: ["account_risk"] }] }, null);
+  check("RULE 12: the tick is offered", /<input type="checkbox" data-proxy-ack-for="honeygain" value="account_risk">/.test(risky), risky);
+  check("RULE 12: it says the account may be suspended", risky.includes("Your Honeygain account may be suspended"), risky);
+  check("RULE 12: a service with no needs gets no tick", !section.includes("data-proxy-ack-for"));
+  const ticks = [
+    { checked: true, slug: "honeygain", value: "account_risk" },
+    { checked: true, slug: "other", value: "account_risk" },
+  ];
+  check("RULE 12: deploy sends the chosen service's tick", JSON.stringify(chosenAcks(ticks, "honeygain")) === '["account_risk"]');
+  check("RULE 12: and no tick of another service", chosenAcks(ticks, "earner").length === 0);
+  check("RULE 12: an unchecked tick is not sent", chosenAcks([{ checked: false, slug: "honeygain", value: "account_risk" }], "honeygain").length === 0);
 }
 
 if (failures) {

@@ -422,6 +422,35 @@ func Refusal(svc catalog.Service) string {
 	return ""
 }
 
+// AckAccountRisk is the owner's tick that the provider may suspend the account of a
+// service whose terms forbid proxies (requirements.proxy_risk). The web UI asks the
+// same tick under the same key (app/proxies.ACK_KEYS).
+const AckAccountRisk = "account_risk"
+
+// Acknowledgements are the ticks svc needs before it runs through a proxy, in order;
+// empty for none.
+func Acknowledgements(svc catalog.Service) []string {
+	if svc.Requirements.ProxyRisk != nil {
+		return []string{AckAccountRisk}
+	}
+	return []string{}
+}
+
+// MissingAcknowledgements are the ticks svc needs that given lacks.
+func MissingAcknowledgements(svc catalog.Service, given []string) []string {
+	have := map[string]bool{}
+	for _, g := range given {
+		have[g] = true
+	}
+	missing := []string{}
+	for _, need := range Acknowledgements(svc) {
+		if !have[need] {
+			missing = append(missing, need)
+		}
+	}
+	return missing
+}
+
 // HostFolder is whether a volume source is a folder on the host rather than a named
 // volume. An unexpanded ${VAR} counts as a folder: it is one once the env fills it.
 func HostFolder(source string) bool {

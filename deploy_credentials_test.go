@@ -110,7 +110,7 @@ func TestDeploySavesTokenAfterAnExplicitSaveAlreadyWriting(t *testing.T) {
 			go func() {
 				values := map[string]string{deployOrderTokenKey: deployToken}
 				if path == "routed" {
-					_, err := app.DeployServiceRouted(slug, values, proxyID)
+					_, err := app.DeployServiceRouted(slug, values, proxyID, nil)
 					deployed <- err
 					return
 				}

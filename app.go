@@ -30,6 +30,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/imageupdates"
 	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
+	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
@@ -530,6 +531,9 @@ type RouteState struct {
 	Proxies []RouteProxy `json:"proxies"`
 	// Refusals is, per visible service, why it cannot run through a proxy ("" when it can).
 	Refusals map[string]string `json:"refusals"`
+	// Needs is, per visible service that needs any, the ticks a route needs
+	// (proxies.Acknowledgements): one checkbox each in the Route box.
+	Needs map[string][]string `json:"needs"`
 	// Recorded is slug -> proxy id of every service routed on this machine, running or
 	// not: a deploy from this machine's own IP asks the owner first.
 	Recorded map[string]int64 `json:"recorded"`
@@ -750,6 +754,7 @@ func (a *App) routeState(visible []catalog.Service) RouteState {
 	out := RouteState{
 		Proxies:     []RouteProxy{},
 		Refusals:    map[string]string{},
+		Needs:       map[string][]string{},
 		Recorded:    map[string]int64{},
 		Running:     a.services.Routes(),
 		ProxiedOnly: services.ProxiedOnly(),
@@ -764,6 +769,9 @@ func (a *App) routeState(visible []catalog.Service) RouteState {
 	}
 	for _, svc := range visible {
 		out.Refusals[svc.Slug] = a.services.ProxyRefusal(svc.Slug)
+		if needs := proxies.Acknowledgements(svc); len(needs) > 0 {
+			out.Needs[svc.Slug] = needs
+		}
 	}
 	return out
 }
@@ -1677,7 +1685,7 @@ func (a *App) deployService(slug string, values map[string]string, opts services
 
 // DeployServiceRouted deploys slug through proxy proxyID from its first start, so it
 // never runs from this machine's own IP (internal/services/routes.go).
-func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID int64) (services.ProxiedResult, error) {
+func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID int64, acknowledged []string) (services.ProxiedResult, error) {
 	if err := a.ready(); err != nil {
 		return services.ProxiedResult{}, err
 	}
@@ -1691,7 +1699,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	if err := a.refuseWithoutDocker(slug); err != nil {
 		return services.ProxiedResult{}, err
 	}
-	result, err := a.services.DeployRouted(a.ctx, slug, creds, proxyID)
+	result, err := a.services.DeployRouted(a.ctx, slug, creds, proxyID, acknowledged...)
 	if err != nil {
 		a.emitError("deploy", err)
 		return services.ProxiedResult{}, err
